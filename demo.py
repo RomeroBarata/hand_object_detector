@@ -108,8 +108,8 @@ def parse_args():
                         type=float,
                         required=False)
 
-    args = parser.parse_args()
-    return args
+    parsed_args = parser.parse_args()
+    return parsed_args
 
 
 lr = cfg.TRAIN.LEARNING_RATE
