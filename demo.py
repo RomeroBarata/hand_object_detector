@@ -191,6 +191,7 @@ if __name__ == '__main__':
     os.makedirs(save_imgs_dir, exist_ok=True)
     # print('Called with args:')
     # print(args)
+    font_path = os.path.join(os.path.dirname(args.load_dir), 'lib/model/utils/times_b.ttf')
 
     if args.cfg_file is not None:
         cfg_from_file(args.cfg_file)
@@ -420,7 +421,8 @@ if __name__ == '__main__':
             data_to_export.append(export_data)
             if vis:
                 # visualization
-                im2show = vis_detections_filtered_objects_PIL(im2show, obj_dets, hand_dets, thresh_hand, thresh_obj)
+                im2show = vis_detections_filtered_objects_PIL(im2show, obj_dets, hand_dets, thresh_hand, thresh_obj,
+                                                              font_path=font_path)
 
             misc_toc = time.time()
             nms_time = misc_toc - misc_tic
