@@ -383,8 +383,9 @@ if __name__ == '__main__':
             if vis and webcam_num == -1:
                 folder_name = args.save_dir
                 os.makedirs(folder_name, exist_ok=True)
-                result_path = os.path.join(folder_name, imglist[num_images][:-4] + "_det.png")
-                im2show.save(result_path)
+                save_filename = os.path.basename(imglist[num_images]).split(sep='.')[0] + '_det.png'
+                result_path = os.path.join(folder_name, save_filename)
+                im2show.save(result_path)  # final image is saved to disk here
             else:
                 im2showRGB = cv2.cvtColor(im2show, cv2.COLOR_BGR2RGB)
                 cv2.imshow("frame", im2showRGB)
