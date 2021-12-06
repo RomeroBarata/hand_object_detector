@@ -8,36 +8,39 @@ from __future__ import division
 from __future__ import print_function
 
 import _init_paths
-import os
-import sys
-import numpy as np
 import argparse
-import pprint
+import json
+import numpy as np
+import os
 import pdb
+import pprint
+import sys
 import time
+
 import cv2
+from PIL import Image
+# from scipy.misc import imread
 import torch
 from torch.autograd import Variable
 import torch.nn as nn
-import torch.optim as optim
 import torch.nn.functional as F
-from PIL import Image
-
-import torchvision.transforms as transforms
+import torch.optim as optim
 import torchvision.datasets as dset
-# from scipy.misc import imread
-from roi_data_layer.roidb import combined_roidb
-from roi_data_layer.roibatchLoader import roibatchLoader
-from model.utils.config import cfg, cfg_from_file, cfg_from_list, get_output_dir
-from model.rpn.bbox_transform import clip_boxes
+import torchvision.transforms as transforms
+
+from model.faster_rcnn.resnet import resnet
+from model.faster_rcnn.vgg16 import vgg16
 # from model.nms.nms_wrapper import nms
 from model.roi_layers import nms
-from model.rpn.bbox_transform import bbox_transform_inv
-from model.utils.net_utils import save_net, load_net, vis_detections, vis_detections_PIL, vis_detections_filtered_objects_PIL, vis_detections_filtered_objects # (1) here add a function to viz
+from model.rpn.bbox_transform import bbox_transform_inv, clip_boxes
 from model.utils.blob import im_list_to_blob
-from model.faster_rcnn.vgg16 import vgg16
-from model.faster_rcnn.resnet import resnet
-import pdb
+from model.utils.config import cfg, cfg_from_file, cfg_from_list, get_output_dir
+from model.utils.matching import filter_object
+from model.utils.net_utils import save_net, load_net, vis_detections, vis_detections_PIL
+from model.utils.net_utils import vis_detections_filtered_objects_PIL, vis_detections_filtered_objects
+from roi_data_layer.roibatchLoader import roibatchLoader
+from roi_data_layer.roidb import combined_roidb
+
 
 try:
     xrange          # Python 2
@@ -152,9 +155,40 @@ def _get_image_blob(im):
     return blob, np.array(im_scale_factors)
 
 
+def get_det_info(dets, det_type='objs'):
+    hand_id_to_hand_name = {0: 'Left', 1: 'Right'}
+    state_id_to_state_name = {0: 'No Contact', 1: 'Self Contact', 2: 'Another Person',
+                              3: 'Portable Object', 4: 'Stationary Object'}
+    bboxes, scores = [], []
+    for det in dets:
+        bbox = list(int(np.round(x)) for x in det[:4])
+        bboxes.append(bbox)
+        score = det[4].item()
+        scores.append(score)
+    det_info = {'bboxes': bboxes, 'scores': scores}
+    if det_type == 'hands':
+        hands, states = [], []
+        for det in dets:
+            hand = hand_id_to_hand_name[det[-1]]
+            hands.append(hand)
+            state = state_id_to_state_name[det[5]]
+            states.append(state)
+        det_info['hands'] = hands
+        det_info['states'] = states
+    return det_info
+
+
 if __name__ == '__main__':
     args = parse_args()
 
+    video_id = os.path.basename(args.image_dir)
+    save_dir = os.path.join(args.save_dir, video_id)
+    os.makedirs(save_dir, exist_ok=True)
+    save_json_filepath = os.path.join(save_dir, video_id + '.json')
+    if os.path.isfile(save_json_filepath):
+        sys.exit(f'Hand-object detections have already been extracted for video {video_id}. Skipping it.')
+    save_imgs_dir = os.path.join(save_dir, 'vis')
+    os.makedirs(save_imgs_dir, exist_ok=True)
     # print('Called with args:')
     # print(args)
 
@@ -241,11 +275,11 @@ if __name__ == '__main__':
         else:
             print(f'image dir = {args.image_dir}')
             print(f'save dir = {args.save_dir}')
-            imglist = os.listdir(args.image_dir)
+            imglist = sorted(os.listdir(args.image_dir), reverse=True)
             num_images = len(imglist)
 
         print('Loaded Photo: {} images.'.format(num_images))
-
+        data_to_export = []
         while num_images > 0:
             total_tic = time.time()
             if webcam_num == -1:
@@ -367,7 +401,23 @@ if __name__ == '__main__':
                         obj_dets = cls_dets.cpu().numpy()
                     if pascal_classes[j] == 'hand':
                         hand_dets = cls_dets.cpu().numpy()
-
+            if (obj_dets is not None) and (hand_dets is not None):
+                hand_to_obj_index_match = filter_object(obj_dets, hand_dets)
+            else:
+                hand_to_obj_index_match = None
+            obj_dets_info = None
+            if obj_dets is not None:
+                obj_dets_info = get_det_info(obj_dets, det_type='objs')
+            hand_dets_info = None
+            if hand_dets is not None:
+                hand_dets_info = get_det_info(hand_dets, det_type='hands')
+            # Export hand and object detection information to a json file.
+            frame_id = imglist[num_images]
+            export_data = {frame_id: {'object_detections': obj_dets_info,
+                                      'hand_detections': hand_dets_info,
+                                      'hand_to_object_match': hand_to_obj_index_match}
+                           }
+            data_to_export.append(export_data)
             if vis:
                 # visualization
                 im2show = vis_detections_filtered_objects_PIL(im2show, obj_dets, hand_dets, thresh_hand, thresh_obj)
@@ -381,10 +431,8 @@ if __name__ == '__main__':
                 sys.stdout.flush()
 
             if vis and webcam_num == -1:
-                folder_name = args.save_dir
-                os.makedirs(folder_name, exist_ok=True)
-                save_filename = os.path.basename(imglist[num_images]).split(sep='.')[0] + '_det.png'
-                result_path = os.path.join(folder_name, save_filename)
+                save_vis_filename = os.path.basename(imglist[num_images]).split(sep='.')[0] + '.png'
+                result_path = os.path.join(save_imgs_dir, save_vis_filename)
                 im2show.save(result_path)  # final image is saved to disk here
             else:
                 im2showRGB = cv2.cvtColor(im2show, cv2.COLOR_BGR2RGB)
@@ -395,7 +443,8 @@ if __name__ == '__main__':
                 print('Frame rate:', frame_rate)
                 if cv2.waitKey(1) & 0xFF == ord('q'):
                     break
-
+        with open(save_json_filepath, mode='w') as f:
+            json.dump(data_to_export, f, indent=4)
         if webcam_num >= 0:
             cap.release()
             cv2.destroyAllWindows()
